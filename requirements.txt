@@ -1,0 +1,10 @@
+requests
+pandas
+praw
+streamlit
+nltk
+dotenv
+langchain
+langchain-mistralai
+python-dotenv
+tenacity

@@ -14,18 +14,18 @@ import logging
 # --- Setup Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- NLTK Data Download (Runs every script load) ---
-logging.info("Starting NLTK data downloads (stopwords, punkt, punkt_tab, averaged_perceptron_tagger).")
+logging.info("Starting NLTK data downloads.")
 try:
     nltk.download('stopwords', quiet=True)
     nltk.download('punkt', quiet=True)
-    nltk.download('punkt_tab', quiet=True)   # ✅ REQUIRED to fix your error
+    nltk.download('punkt_tab', quiet=True)  # ✅ For newer NLTK versions
     nltk.download('averaged_perceptron_tagger', quiet=True)
+    nltk.download('averaged_perceptron_tagger_eng', quiet=True)  # ✅ Add this
     logging.info("NLTK data download complete.")
 except Exception as e:
     logging.error(f"Error downloading NLTK data: {e}")
     st.error("Could not download necessary NLTK packages.")
-    
+
 # --- LLM Prompt Definition ---
 # This template is used inside the _get_llm_response function to structure the call.
 SYSTEM_PROMPT = """
@@ -376,3 +376,4 @@ if st.button("Search and Analyze Reddit Posts"):
                      st.session_state['error_displayed'] = True # Prevent multiple error displays on re-runs
                 else:
                     logging.error("Suppressed re-run error display.")
+

@@ -18,9 +18,9 @@ logging.info("Starting NLTK data downloads.")
 try:
     nltk.download('stopwords', quiet=True)
     nltk.download('punkt', quiet=True)
-    nltk.download('punkt_tab', quiet=True)  # ✅ For newer NLTK versions
+    nltk.download('punkt_tab', quiet=True)    # ✅ For newer NLTK versions
     nltk.download('averaged_perceptron_tagger', quiet=True)
-    nltk.download('averaged_perceptron_tagger_eng', quiet=True)  # ✅ Add this
+    nltk.download('averaged_perceptron_tagger_eng', quiet=True)    # ✅ Add this
     logging.info("NLTK data download complete.")
 except Exception as e:
     logging.error(f"Error downloading NLTK data: {e}")
@@ -97,11 +97,27 @@ def extract_keywords(text: str) -> str:
     logging.info(f"Extracted keywords: {extracted}")
     return extracted
 
-def get_reddit_posts(creds: dict, key_words: str, subreddit_name: str, limit: int) -> list:
+def clean_subreddit_name(name: str) -> str:
     """
-    Connects to Reddit and retrieves posts based on keywords.
+    Cleans the subreddit name input by removing leading/trailing spaces and
+    any 'r/' prefix, leaving only the expected name string.
     """
-    logging.info(f"Attempting to fetch {limit} posts from r/{subreddit_name} with keywords: {key_words}")
+    if not name:
+        return ""
+    
+    # 1. Strip leading/trailing whitespace
+    cleaned = name.strip()
+    
+    # 2. Remove common prefixes like 'r/'
+    cleaned = re.sub(r"^(r\/)", "", cleaned, flags=re.IGNORECASE)
+    
+    return cleaned
+
+def get_reddit_posts(creds: dict, key_words: str, subreddit_name: str, limit: int, time_filter: str) -> list:
+    """
+    Connects to Reddit and retrieves posts based on keywords and a time filter.
+    """
+    logging.info(f"Attempting to fetch {limit} posts from r/{subreddit_name} with keywords: {key_words} (Time filter: {time_filter})")
     try:
         reddit = praw.Reddit(
             client_id=creds.get("client_id"),
@@ -112,8 +128,12 @@ def get_reddit_posts(creds: dict, key_words: str, subreddit_name: str, limit: in
         )
         posts = []
         
-        # Use a list to store temporary submission data before appending
-        submissions = reddit.subreddit(subreddit_name).search(key_words, limit=limit)
+        # Use the provided time_filter parameter
+        submissions = reddit.subreddit(subreddit_name).search(
+            key_words, 
+            limit=limit, 
+            time_filter=time_filter
+        )
 
         for idx, submission in enumerate(submissions, start=1):
             
@@ -217,15 +237,23 @@ async def _get_llm_response(research_question: str, posts: list, llm_endpoint: s
             logging.error(f"An unexpected error occurred during LLM call: {e}", exc_info=True)
             raise # Re-raise for tenacity to handle the retry
 
-async def reddit_main(query: str, subreddit_name: str, limit: int, creds: dict, llm_endpoint: str, llm_api_key: str) -> list:
+async def reddit_main(query: str, subreddit_name: str, limit: int, creds: dict, llm_endpoint: str, llm_api_key: str, time_filter: str) -> list:
     """
     Main asynchronous function to orchestrate the entire process for Reddit.
     """
-    logging.info(f"Starting Reddit search and analysis for query: '{query}'")
+    # Clean the subreddit name immediately after receiving the input
+    cleaned_subreddit_name = clean_subreddit_name(subreddit_name)
+    
+    logging.info(f"Starting Reddit search and analysis for query: '{query}' on cleaned subreddit: '{cleaned_subreddit_name}'")
     key_words = extract_keywords(query)
     
+    if not cleaned_subreddit_name:
+        logging.warning("Cleaned subreddit name is empty. Aborting search.")
+        st.error("Please enter a valid Subreddit Name.")
+        return []
+    
     # 1. Fetch Reddit posts
-    reddit_results = get_reddit_posts(creds, key_words, subreddit_name, limit)
+    reddit_results = get_reddit_posts(creds, key_words, cleaned_subreddit_name, limit, time_filter)
     if not reddit_results:
         logging.info("No Reddit posts were found.")
         return []
@@ -285,13 +313,11 @@ password = st.text_input("Password", type="password", key="reddit_password")
 user_agent = st.text_input("User Agent", "myRedditApp", key="reddit_user_agent")
 
 # --- LLM Credentials ---
-st.subheader("2. LLM Credentials (Azure Mistral)")
-st.markdown("*(Required for relevance scoring)*")
-llm_endpoint = st.text_input("Azure Endpoint URL", key="llm_endpoint")
-llm_api_key = st.text_input("API Key", type="password", key="llm_api_key")
+llm_endpoint = "https://mistral-small-reddit.swedencentral.models.ai.azure.com"
+llm_api_key = "GzpY33xGmeqGkd6zEH9lZEm2yDSA9ej1"
 
 # --- Search Parameters ---
-st.subheader("3. Search Parameters")
+st.subheader("2. Search Parameters")
 research_question = st.text_input(
     "Research Question / Search Query (e.g., 'What methods do people use to manage chronic diabetes?')",
     key="research_question"
@@ -302,6 +328,21 @@ subreddit_name = st.text_input(
     "Enter the Subreddit Name (e.g., mentalhealth, diabetes)",
     key="subreddit_name"
 )
+
+# Map user-friendly display names to PRAW's time_filter values
+TIME_FILTER_OPTIONS = {
+    "Past Month": "month",
+    "Past Year": "year",
+    "All Time": "all"
+}
+
+# New UI element for selecting the time filter
+selected_time_filter_label = st.selectbox(
+    "Post Age Limit",
+    options=list(TIME_FILTER_OPTIONS.keys()),
+    index=1 # Default to Past Year
+)
+
 
 # Corrected UI label for clarity
 limit = st.number_input(
@@ -315,6 +356,10 @@ limit = st.number_input(
 # Button to trigger the Reddit search and LLM analysis
 if st.button("Search and Analyze Reddit Posts"):
     logging.info("Reddit search and analyze button clicked.")
+    
+    # Determine the PRAW time filter value based on the user's selection
+    time_filter_value = TIME_FILTER_OPTIONS[selected_time_filter_label]
+    
     # Input validation
     if not all([client_id, client_secret, username, password]):
         st.error("Please fill in all Reddit API credentials.")
@@ -343,12 +388,17 @@ if st.button("Search and Analyze Reddit Posts"):
                     limit,
                     user_creds,
                     llm_endpoint,
-                    llm_api_key
+                    llm_api_key,
+                    time_filter_value # Pass the selected time filter
                 ))
                 
+                # We need to re-clean the subreddit name here for the display text
+                display_subreddit_name = clean_subreddit_name(subreddit_name)
+                
                 if sorted_posts:
-                    st.header(f"--- \n Search Results in r/{subreddit_name}")
+                    st.header(f"--- \n Search Results in r/{display_subreddit_name}")
                     st.markdown("Posts are ranked by **Relevance Score** (5 = highly relevant, 1 = not relevant).")
+                    st.markdown(f"**:hourglass: Note: Posts are limited to the {selected_time_filter_label}.**") 
                     logging.info("Displaying sorted posts to the user.")
                     
                     for submission in sorted_posts:
@@ -365,15 +415,18 @@ if st.button("Search and Analyze Reddit Posts"):
 
                         st.markdown("---")
                 else:
-                    st.warning("No posts were found or analyzed.")
-                    logging.warning("No posts were found or analyzed. Displaying warning to user.")
+                    # Check if the failure was due to a bad subreddit name
+                    if not display_subreddit_name:
+                         st.error("The subreddit name you entered was invalid after cleaning. Please enter a valid name (e.g., 'diabetes' or 'r/mentalhealth').")
+                    else:
+                        st.warning(f"No posts were found or analyzed in r/{display_subreddit_name}.")
+                        logging.warning("No posts were found or analyzed. Displaying warning to user.")
                     
             except Exception as e:
                 # Catch any unexpected errors from the main process
                 if not st.session_state.get('error_displayed'):
-                     st.error(f"An unexpected error occurred during the process: {e}")
-                     logging.critical(f"An unexpected error occurred during the main Reddit process: {e}", exc_info=True)
-                     st.session_state['error_displayed'] = True # Prevent multiple error displays on re-runs
+                    st.error(f"An unexpected error occurred during the process: {e}")
+                    logging.critical(f"An unexpected error occurred during the main Reddit process: {e}", exc_info=True)
+                    st.session_state['error_displayed'] = True # Prevent multiple error displays on re-runs
                 else:
                     logging.error("Suppressed re-run error display.")
-

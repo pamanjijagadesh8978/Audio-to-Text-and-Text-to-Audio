@@ -300,6 +300,9 @@ async def reddit_main(query: str, subreddit_name: str, limit: int, creds: dict, 
 
 
 # --- Streamlit App UI ---
+st.set_page_config(
+    page_title="NourIQ-SocialAi"
+)
 st.header("Reddit Search & Relevance Analysis")
 st.markdown("Find posts and rank them by relevance to a research question using an LLM.")
 
